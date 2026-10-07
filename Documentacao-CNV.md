@@ -235,9 +235,8 @@ Saudável: `wsrep_cluster_size` = nº de nós (2), `wsrep_cluster_status` = `Pri
 - `ls -l`: `-rw-r--r--` = ficheiro, dono `rw-`, grupo `r--`, outros `r--` (644).
 
 ## Falta fazer
-1. (feito) Teste de replicação do slide 29.
-2. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
-3. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), actualizar `wsrep_cluster_address` nos 3 nós, depois HAProxy + Keepalived à frente da BD.
+1. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
+2. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), actualizar `wsrep_cluster_address` nos 3 nós, depois HAProxy + Keepalived à frente da BD.
 
 
 ### O que fazer quando:
