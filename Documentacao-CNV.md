@@ -1,10 +1,12 @@
 # Documentação
 
-## 1. Preparar o disco
+## Configuração VMs + Ubuntu Server + SSH com Warp
+
+### 1. Preparar o disco
 1. Reformatar o SanDisk para APFS.
 2. Criar a pasta `UTM` e, dentro, `ISOs` (com o ISO do Ubuntu).
 
-## 2. VM modelo (`ubuntu-base`)
+### 2. VM modelo (`ubuntu-base`)
 4. No UTM, criar uma VM com 12 GB de disco e instalar o Ubuntu Server 26.04 ARM64.
 5. Na instalação usar 2 GB de RAM (com 1 GB o teclado perde teclas); depois voltar a 1 GB.
 6. Instalar o `openssh-server` durante a instalação do Ubuntu (selecionar na lista de pacotes) ou depois com `sudo apt install openssh-server`.
@@ -12,31 +14,31 @@
 8. Limpar o `/etc/machine-id` para que cada clone gere um ID único: `sudo truncate -s 0 /etc/machine-id` (será regenerado no próximo boot).
 8. Desligar a `ubuntu-base`: só serve para clonar.
 
-## 3. Primeira clone (`srv01`)
+### 3. Primeira clone (`srv01`)
 9. Botão direito na `ubuntu-base` desligada, Clone, nome `srv01`.
 10. Antes de ligar, gerar um MAC aleatório em Network (o UTM não o muda sozinho).
 11. Mudar o nome com `sudo hostnamectl set-hostname srv01`.
 12. Gerar chaves SSH novas da máquina: `sudo rm /etc/ssh/ssh_host_* && sudo dpkg-reconfigure openssh-server`, depois `sudo reboot`.
 13. Confirmar o IP com `ip a`.
 
-## 4. SSH com o Warp
+### 4. SSH com o Warp
 14. Ligar à `srv01` por SSH no Warp (`ssh rodrigo@192.168.64.X`).
 15. O Warp mostra a árvore de ficheiros da VM e cria `.warp` e `.config/warp-terminal` na VM.
 
-## 5. Controlar as VMs pelo terminal
+### 5. Controlar as VMs pelo terminal
 16. Criar o script `~/bin/vms` (usa o `utmctl`) com `vms up`, `vms down`, `vms ls`.
 17. Acrescentar `~/bin` ao PATH no `~/.zshrc`.
 18. O `--hide` do `utmctl` só esconde a janela principal do UTM, por isso o script também esconde o UTM com `osascript`.
 19. O UTM tem de ficar aberto (se o fechar as VMs param) e o SanDisk ligado.
 
-## 6. Login por chave SSH
+### 6. Login por chave SSH
 20. A chave pública é mais segura e cómoda que a password.
 21. Se já existirem chaves no Mac (`id_ed25519` e `id_rsa`), responder n ao `ssh-keygen` para não as substituir.
 22. `ssh-copy-id rodrigo@192.168.64.6` para pôr a chave na `srv01`.
 23. `ssh srv01` e `ssh ubuntu-base` entram sem pedir a password da VM.
 24. Sair de uma sessão sem desligar a VM: `exit`, Ctrl+D ou fechar o tab.
 
-## Por fazer
+### Por fazer
 - Confirmar com `ssh -o PasswordAuthentication=no srv01` que só a chave entra.
 - Desligar o login por password (`/etc/ssh/sshd_config.d/00-no-password.conf`), com a janela do UTM como plano B.
 - Pôr a chave na `ubuntu-base` antes de criar as restantes clones (`srv02` a `srv16`).
