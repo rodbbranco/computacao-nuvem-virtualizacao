@@ -38,12 +38,6 @@
 23. `ssh srv01` e `ssh ubuntu-base` entram sem pedir a password da VM.
 24. Sair de uma sessão sem desligar a VM: `exit`, Ctrl+D ou fechar o tab.
 
-### Por fazer
-- Confirmar com `ssh -o PasswordAuthentication=no srv01` que só a chave entra.
-- Desligar o login por password (`/etc/ssh/sshd_config.d/00-no-password.conf`), com a janela do UTM como plano B.
-- Pôr a chave na `ubuntu-base` antes de criar as restantes clones (`srv02` a `srv16`).
-- Atalhos no `~/.ssh/config` e Launch Configuration do Warp.
-
 
 # Percurso da aula, 2026-10-06 (Cluster de BD com MariaDB + Galera)
 
