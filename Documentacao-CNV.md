@@ -45,7 +45,7 @@ Objetivo da aula: slides 24 a 29 do PDF `Cluster_HA_LOAD_B_CLOUD.pdf`. Hoje só 
 
 ## Conceitos
 - **Nó** = cada máquina do cluster (cada VM de BD).
-- **Galera** = extra do MariaDB que mantém os dados iguais em todos os nós (escreves num, aparece nos outros).
+- **Galera** = extra do MariaDB que mantém os dados iguais em todos os nós (escreve-se num, aparece nos outros).
 - **Placa de rede** = ligação de uma máquina a uma rede. Na VM é emulada pelo UTM.
 - Cada VM tem 2 placas: `enp0s1` = NAT (Internet, updates, SSH, IP automático 192.168.64.x); `enp0s2` = Host Only (rede privada do cluster, IP fixo 10.84.128.x). No fim desliga-se a NAT.
 - `/etc/netplan/` = dar IP fixo à placa. `/etc/hosts` = tabela nome → IP (sem DNS). São duas coisas diferentes.
@@ -75,7 +75,7 @@ ip -br link   # placas e MAC real de cada uma
 ```
 sudo nano /etc/netplan/60-cluster.yaml
 ```
-Conteúdo (db01; na db02 troca o IP por 10.84.128.16/24):
+Conteúdo (db01; na db02 o IP passa a 10.84.128.16/24):
 ```yaml
 network:
   version: 2
@@ -138,7 +138,7 @@ sudo systemctl stop mariadb
 ```
 
 ### 11. Ficheiro `/etc/mysql/conf.d/galera.cnf` (em cada VM, em separado)
-Tem de acabar em `.cnf` (o MariaDB ignora outras extensões; se te enganares, `sudo mv galera.dnf galera.cnf`).
+Tem de acabar em `.cnf` (o MariaDB ignora outras extensões; em caso de engano na extensão: `sudo mv galera.dnf galera.cnf`).
 ```
 [mysqld]
 binlog_format=ROW
