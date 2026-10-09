@@ -14,15 +14,15 @@
 8. Limpar o `/etc/machine-id` para que cada clone gere um ID único: `sudo truncate -s 0 /etc/machine-id` (será regenerado no próximo boot).
 8. Desligar a `ubuntu-base`: só serve para clonar.
 
-### 3. Primeira clone (`srv01`)
-9. Botão direito na `ubuntu-base` desligada, Clone, nome `srv01`.
+### 3. Primeira clone (`db01`)
+9. Botão direito na `ubuntu-base` desligada, Clone, nome `db01`.
 10. Antes de ligar, gerar um MAC aleatório em Network (o UTM não o muda sozinho).
-11. Mudar o nome com `sudo hostnamectl set-hostname srv01`.
+11. Mudar o nome com `sudo hostnamectl set-hostname db01`.
 12. Gerar chaves SSH novas da máquina: `sudo rm /etc/ssh/ssh_host_* && sudo dpkg-reconfigure openssh-server`, depois `sudo reboot`.
 13. Confirmar o IP com `ip a`.
 
 ### 4. SSH com o Warp
-14. Ligar à `srv01` por SSH no Warp (`ssh rodrigo@192.168.64.X`).
+14. Ligar à `db01` por SSH no Warp (`ssh rodrigo@192.168.64.X`).
 15. O Warp mostra a árvore de ficheiros da VM e cria `.warp` e `.config/warp-terminal` na VM.
 
 ### 5. Controlar as VMs pelo terminal
@@ -34,8 +34,8 @@
 ### 6. Login por chave SSH
 20. A chave pública é mais segura e cómoda que a password.
 21. Se já existirem chaves no Mac (`id_ed25519` e `id_rsa`), responder n ao `ssh-keygen` para não as substituir.
-22. `ssh-copy-id rodrigo@192.168.64.6` para pôr a chave na `srv01`.
-23. `ssh srv01` e `ssh ubuntu-base` entram sem pedir a password da VM.
+22. `ssh-copy-id rodrigo@192.168.64.6` para pôr a chave na `db01`.
+23. `ssh db01` e `ssh ubuntu-base` entram sem pedir a password da VM.
 24. Sair de uma sessão sem desligar a VM: `exit`, Ctrl+D ou fechar o tab.
 
 
