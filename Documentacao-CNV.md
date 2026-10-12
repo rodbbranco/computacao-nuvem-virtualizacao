@@ -21,6 +21,18 @@
 12. Gerar chaves SSH novas da máquina: `sudo rm /etc/ssh/ssh_host_* && sudo dpkg-reconfigure openssh-server`, depois `sudo reboot`.
 13. Confirmar o IP com `ip a`.
 
+#### Problema: erro `The file "edk2-arm-vars.fd" doesn't exist` ao clonar ou ligar
+O que é e o que se faz: depois de mover o `.utm` para o SanDisk, o UTM continuava a apontar para a pasta antiga; volta-se a abrir a VM a partir do SanDisk.
+- Causa: o UTM guarda o caminho da VM. Se a pasta mudou, não encontra o ficheiro de arranque (`efi_vars.fd`, dentro de `NOME.utm/Data/`). O ficheiro está bem no SanDisk, o que falha é o caminho guardado.
+- Sinal: **Show in Finder** na VM não abre nenhuma janela.
+- Correção: botão direito na VM, **Remove** (não Delete: só tira da lista, os ficheiros ficam). Depois **File → Open…** e abrir `OS Temp/UTM/VMs/NOME.utm`.
+- Confirmar que os ficheiros existem: `ls -la "/Volumes/OS Temp/UTM/VMs/NOME.utm/Data/"` (deve mostrar o `.qcow2` e o `efi_vars.fd`).
+
+#### Problema: a clone fica com o mesmo IP da NAT (`enp0s1`) que o original
+O que é e o que se faz: a NAT do UTM dá o IP por DHCP, que identifica a máquina pelo `machine-id`; a clone herdou o do original, por isso gera-se um novo.
+- Dentro da clone: `sudo rm /etc/machine-id` e `sudo systemd-machine-id-setup` (apaga o ID copiado e cria um novo e aleatório).
+- Reiniciar (`sudo reboot`) e confirmar com `ip -br a` que a `enp0s1` tem um IP diferente do original.
+
 ### 4. SSH com o Warp
 14. Ligar à `db01` por SSH no Warp (`ssh rodrigo@192.168.64.X`).
 15. O Warp mostra a árvore de ficheiros da VM e cria `.warp` e `.config/warp-terminal` na VM.
