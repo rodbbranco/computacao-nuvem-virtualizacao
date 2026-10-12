@@ -235,6 +235,31 @@ Saudável: `wsrep_cluster_size` = nº de nós (2), `wsrep_cluster_status` = `Pri
 - Os slides mostram 12 VMs mas o professor falou em 16: perguntar quais são as 4 extra (talvez elasticidade) e se podemos usar menos RAM.
 - Os slides usam Ubuntu 18.04 e nós o 26.04: alguns comandos mudaram (`mariadb-secure-installation`, nomes `mariadb`/`mariadbd`).
 
+### 21. Dar nomes aos IPs fixos (`/etc/hosts`), nas duas VMs
+O que é: sem DNS, o `/etc/hosts` é a tabela local nome → IP. O que se faz: acrescentar uma linha por máquina para poder usar `db01`/`db02` em vez dos IPs.
+```
+sudo nano /etc/hosts
+```
+- `sudo`: executar como administrador (o ficheiro é do sistema).
+- `nano`: editor de texto no terminal.
+- `/etc/hosts`: o ficheiro a editar.
+
+Acrescentar no fim (igual nas duas VMs):
+```
+10.84.128.11 db01
+10.84.128.16 db02
+```
+- Formato de cada linha: IP, espaço, nome.
+- Guardar no nano: Ctrl+O, Enter, Ctrl+X.
+
+Testar (a partir de cada VM):
+```
+ping -c 2 db02
+```
+- `ping`: envia pacotes de teste e espera resposta.
+- `-c 2`: enviar só 2 pacotes (c = count) e parar.
+- `db02`: o nome que o `/etc/hosts` traduz para 10.84.128.16 (na db02 testar `db01`).
+
 ## Permissões Linux (resumo)
 - r=4 (ler), w=2 (escrever), x=1 (executar/entrar na pasta). Ordem: dono, grupo, outros.
 - 600 = só o dono lê/escreve · 644 = dono lê/escreve, resto lê · 755 = dono tudo, resto lê/executa.
