@@ -1,13 +1,14 @@
 # Documentação
 
-Guia pela ordem em que as coisas se fazem. Para cada VM nova do trabalho prático: Parte 3 (criar a VM), Parte 4 (rede do cluster) e depois a parte do serviço dessa VM (ex.: Parte 5 para a BD). A Parte 6 é só consulta.
+Guia pela ordem em que as coisas se fazem. Para cada VM nova do trabalho prático: Parte 3 (criar a VM), Parte 4 (rede do cluster) e depois a parte do serviço dessa VM (ex.: Parte 5 para a BD). A Parte 7 é só consulta.
 
 - Parte 1. Preparar o Mac
 - Parte 2. VM modelo (`ubuntu-base`)
 - Parte 3. Criar uma VM nova a partir do modelo
 - Parte 4. Rede do cluster (IP fixo e nomes)
 - Parte 5. Cluster de BD: MariaDB + Galera
-- Parte 6. Consulta
+- Parte 6. HAProxy + Keepalived à frente da BD (slides 30 e 31)
+- Parte 7. Consulta
 - Falta fazer
 
 
@@ -104,6 +105,9 @@ Em cada VM do cluster.
 | db01 | db1 | 10.84.128.11 |
 | db02 | db2 | 10.84.128.16 |
 | (3.ª, mais tarde) | db3 | 10.84.128.13 |
+| haproxydb01 | (haproxydb1 no `/etc/hosts`) | 10.84.128.17 |
+| haproxydb02 (ainda não criada) | haproxydb2 | 10.84.128.21 |
+| IP virtual da BD (Keepalived) | | 10.84.128.253 |
 
 ## 4.1 Segunda placa de rede (UTM, VM desligada)
 1. Botão direito na VM → **Edit**.
@@ -285,25 +289,189 @@ mysql -u root -p -e "DROP DATABASE teste_cluster;"
 - Se falhar com "safe to bootstrap": `sudo cat /var/lib/mariadb/grastate.dat`; o nó com `safe_to_bootstrap: 1` é o que deve arrancar primeiro.
 
 
-# Parte 6. Consulta
+# Parte 6. HAProxy + Keepalived à frente da BD (slides 30 e 31)
+Aula de 2026-10-12. Objetivo: duas máquinas HAProxy (haproxydb1 `.17` e haproxydb2 `.21`) à frente do cluster de BD, para alta disponibilidade e balanceamento de carga. Os clientes (mais tarde o Moodle) falam só com o IP virtual `10.84.128.253`, que passa de um HAProxy para o outro se um falhar. Hoje só a haproxydb01.
 
-## 6.1 O que quer dizer `mysql -u root -p -e "..."`
+## 6.1 Criar a haproxydb01 (UTM)
+O que é e o que se faz: uma VM nova clonada da `ubuntu-base`, com 512 MB, igual às outras (Parte 3).
+1. `ubuntu-base` desligada e SanDisk ligado. Botão direito → **Clone**, nome `haproxydb01`.
+2. **Show in Finder**: confirmar que ficou em `UTM/VMs` no SanDisk.
+3. **Edit** → na placa existente, MAC **Random**; **New… → Network → Host Only**, também MAC **Random**.
+4. **System** → memória **512 MB** → **Save**.
+
+Engano evitado: o primeiro clone (`ha1db`) tinha sido feito a partir da **db02** e a `enp0s2` já vinha com o IP `10.84.128.16`, porque o IP fixo está no disco (`60-cluster.yaml`), não no MAC. Também trazia o MariaDB e o Galera da db02, que podiam tentar entrar no cluster. Solução: `sudo systemctl stop mariadb`, `sudo poweroff`, apagar essa VM (cuidado a escolher a certa) e clonar a `ubuntu-base`. Antes de apagar, confirmar na db01 que `wsrep_cluster_size` continua a 2.
+
+## 6.2 Nome, MAC e IP fixo (.17)
+O que é e o que se faz: repetir na haproxydb01 o que já se fez nas BD, com o IP `10.84.128.17`.
+1. Ligar e ver as placas: `ip -br a` e `ip -br link`.
+2. Nome: `sudo hostnamectl set-hostname haproxydb01` (como em 3.1).
+3. MAC real da `enp0s1` no `00-installer-config.yaml` (como em 4.5).
+4. `/etc/netplan/60-cluster.yaml` com `10.84.128.17/24` na `enp0s2`, `chmod 600` e `sudo netplan apply` (como em 4.3, 4.4 e 4.6).
+5. Confirmar: a `enp0s2` mostra `10.84.128.17/24`.
+- O IP da NAT mudou (192.168.64.10 → .3) depois do `netplan apply`. É normal: a NAT dá o IP por DHCP e a VM voltou a pedi-lo. Não afeta o cluster, porque a rede do cluster é a `enp0s2`, com IP fixo. Voltar a ver o IP com `ip -br a` depois de cada `netplan apply`.
+
+## 6.3 Problema: a haproxydb01 recebeu o mesmo IP da NAT que a db02
+O que é: a haproxydb01 ia sempre buscar o `192.168.64.3`, o da db02, mesmo com MACs diferentes.
+- Causa provável: a clone herdou o `machine-id` da `ubuntu-base` e o DHCP do UTM identifica a máquina por ele.
+- Ver: `cat /etc/machine-id` em cada VM (se for igual, é isto).
+- Correção: a da secção 3.2 (`sudo rm /etc/machine-id`, `sudo systemd-machine-id-setup`, `sudo reboot`).
+- Para o futuro: logo depois de clonar, gerar o `machine-id` novo, tal como as chaves SSH.
+
+## 6.4 `/etc/hosts` da haproxydb01
+O que é e o que se faz: tabela nome → IP com as BD e os HAProxy, como pede o slide 31 (sem DNS).
+```
+sudo nano /etc/hosts
+```
+- A linha `127.0.1.1 ubuntu-base` trocar por `127.0.1.1 haproxydb01` (é o nome da própria máquina; se ficar o antigo, o `sudo` pode queixar-se de "unable to resolve host").
+- Acrescentar no fim:
+```
+10.84.128.11 db1
+10.84.128.16 db2
+10.84.128.13 db3
+10.84.128.17 haproxydb1 haproxydb01
+10.84.128.21 haproxydb2
+```
+- Uma linha por IP; vários nomes na mesma linha, separados por espaço.
+- O `ping -c 2 haproxydb01` só funciona porque o nome `haproxydb01` está na linha do `.17`. Sem isso dá "Temporary failure in name resolution", mesmo sendo o hostname.
+- Cada VM tem o seu `/etc/hosts`: nada se partilha sozinho. A ideia é ter a mesma tabela em todas as máquinas, menos a linha `127.0.1.1`, que leva sempre o nome da própria máquina.
+- Testar: `ping -c 2 db1` (deve dar `0% packet loss` com a db01 ligada).
+
+## 6.5 Instalar HAProxy, Keepalived e Apache (slide 31)
+O que é e o que se faz: os 3 serviços que o slide pede nas máquinas HAProxy: balanceador (HAProxy), IP virtual (Keepalived) e servidor web (Apache). Precisa de Internet, por isso usa a NAT.
+```
+sudo apt-get update
+sudo apt-get install haproxy keepalived apache2 -y
+```
+- `apt-get update`: atualiza a lista de pacotes (não instala nada).
+- `install`: instala os pacotes indicados.
+- `haproxy`: recebe os pedidos e reparte-os pelas BD.
+- `keepalived`: cria o IP virtual e decide qual dos 2 HAProxy o tem (VRRP).
+- `apache2`: servidor web. O slide não diz para quê; dedução: página de teste ou verificação de que a máquina está viva. A confirmar com o professor.
+- `-y`: responde "sim" às perguntas.
+
+Confirmar:
+```
+haproxy -v
+keepalived --version
+systemctl is-active apache2
+```
+- `-v` e `--version`: mostram a versão. Resultado: HAProxy 3.2.9, Keepalived 2.3.4.
+- `systemctl is-active apache2`: diz `active` se o serviço está a correr. Resultou `active`.
+
+## 6.6 Firewall da haproxydb01
+```
+sudo ufw status
+```
+- `ufw`: a firewall do Ubuntu; `status` só mostra o estado.
+- Resultou `inactive`: não é preciso abrir portas nesta máquina.
+
+## 6.7 Keepalived: ficheiro de configuração (MASTER)
+O que é e o que se faz: define o IP virtual `10.84.128.253` e que esta máquina é a principal (MASTER). A haproxydb02 será a reserva (BACKUP).
+```
+sudo nano /etc/keepalived/keepalived.conf
+```
+- O ficheiro ainda não existe: o nano abre-o vazio.
+```
+vrrp_instance VI_DB {
+    state MASTER
+    interface enp0s2
+    virtual_router_id 53
+    priority 101
+    advert_int 1
+    virtual_ipaddress {
+        10.84.128.253/24
+    }
+}
+```
+- `vrrp_instance VI_DB`: grupo VRRP (o protocolo que decide quem tem o IP virtual); `VI_DB` é só um nome.
+- `state MASTER`: arranca como principal.
+- `interface enp0s2`: a placa onde o IP virtual aparece (a Host Only, do cluster).
+- `virtual_router_id 53`: número do grupo (1 a 255); tem de ser igual nas duas máquinas.
+- `priority 101`: ganha o número mais alto; a haproxydb02 terá um mais baixo (ex.: 100).
+- `advert_int 1`: o MASTER diz "estou vivo" de 1 em 1 segundo; se deixar de dizer, o BACKUP assume.
+- `virtual_ipaddress`: o IP virtual e a máscara.
+
+## 6.8 Arrancar o Keepalived e ver o IP virtual
+```
+sudo systemctl enable --now keepalived
+ip -br a show enp0s2
+```
+- `enable`: arranca sempre que a VM liga. `--now`: arranca também já.
+- `ip -br a show enp0s2`: IPs só da `enp0s2`.
+- Resultado: a `enp0s2` tem `10.84.128.17/24` (próprio) e `10.84.128.253/24` (virtual, `secondary`). **Confirmado.**
+
+## 6.9 Parar o Keepalived e testar o IP virtual
+```
+sudo systemctl stop keepalived       # pára já; o .253 desaparece da placa
+sudo systemctl disable keepalived    # tira do arranque (inverso de enable)
+sudo systemctl start keepalived      # volta a ligar
+systemctl is-active keepalived       # active / inactive
+```
+- Parado, o `.253` deixa de existir na VM. É assim que se simula uma falha quando a haproxydb02 existir: parar o Keepalived da 01 e ver o `.253` passar para a 02.
+- O ping do Mac ao `.253` **não serve de teste**: respondia com `ttl=56` e tempos de 88 a 860 ms, ou seja, saía por outro caminho (provavelmente VPN ou rede externa que usa também 10.84.128.x). Testar a partir de uma VM do cluster, por exemplo a db01: `ping -c 3 10.84.128.253` (parado: `100% packet loss`; ligado: responde em menos de 1 ms).
+- Para ver por onde o Mac envia um IP: `route -n get 10.84.128.253` (linhas `gateway:` e `interface:`).
+- `arp -n IP` mostra o MAC associado a um IP (a haproxydb01 tem `4e:c7:71:6b:47:8b`); `sudo arp -d IP` apaga a entrada da tabela.
+- **Teste a partir da db01 feito e resultou.**
+
+## 6.10 Engano: instalar `mailutils-mh` sem querer
+O que é e o que se faz: pacote instalado por engano; remove-se com a configuração e as dependências que só ele puxou.
+```
+sudo apt-get purge mailutils-mh -y
+sudo apt-get autoremove --purge -y
+```
+- `purge`: remove o pacote e os ficheiros de configuração dele.
+- `autoremove --purge`: remove os pacotes que só estavam instalados por causa dele.
+- Ler a lista antes do Enter: se aparecer `haproxy`, `keepalived` ou `apache2`, parar.
+
+## 6.11 HAProxy: balancear as ligações às BD (por fazer)
+O que é e o que se faz: o HAProxy fica à escuta na porta 3306 e reparte as ligações pela db1 e db2, à vez.
+```
+sudo nano /etc/haproxy/haproxy.cfg
+```
+Acrescentar no fim, sem apagar o que lá está:
+```
+listen mariadb_cluster
+    bind *:3306
+    mode tcp
+    balance roundrobin
+    option tcpka
+    server db1 10.84.128.11:3306 check
+    server db2 10.84.128.16:3306 check
+```
+- `listen mariadb_cluster`: bloco que junta a entrada e os servidores de trás; o nome é livre.
+- `bind *:3306`: escuta na porta 3306 em todos os IPs da máquina, incluindo o virtual.
+- `mode tcp`: passa as ligações tal como vêm (o MariaDB não é HTTP).
+- `balance roundrobin`: distribui à vez.
+- `option tcpka`: mantém as ligações vivas com pequenos sinais.
+- `server db1 10.84.128.11:3306 check`: servidor de trás (nome, IP, porta); `check` faz o HAProxy testar se está vivo e deixar de lhe enviar ligações se falhar. A linha da db2 é igual com o `.16`.
+
+Validar antes de usar:
+```
+sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+```
+- `-c`: só verifica (check), não arranca; `-f`: o ficheiro a verificar. Esperado: `Configuration file is valid`.
+- Falta confirmar se o bloco foi acrescentado e validado; depois reiniciar o HAProxy (`sudo systemctl restart haproxy`) e testar.
+
+
+# Parte 7. Consulta
+
+## 7.1 O que quer dizer `mysql -u root -p -e "..."`
 - `-u root`: entrar como o utilizador `root` **da base de dados** (não é o root do Ubuntu; o MariaDB tem utilizadores próprios).
 - `-p`: pede a password (a do `mariadb-secure-installation`), sem a escrever no comando.
 - `-e "..."`: executa essa instrução SQL e sai.
 
-## 6.2 Conceitos do `galera_new_cluster`
+## 7.2 Conceitos do `galera_new_cluster`
 - É um comando (script do MariaDB), não sintaxe. Liga o interruptor `_WSREP_NEW_CLUSTER` e arranca o MariaDB: cria o cluster de raiz a partir deste nó.
 - O nome do cluster (`moodle_galera_cluster`) vem do `galera.cnf` (`wsrep_cluster_name`), escolhido por nós.
 - Só se corre quando o cluster tem de nascer de novo: criação, ou quando **todos** os nós estavam parados. Se um nó avaria e os outros estão vivos, basta `sudo systemctl start mariadb` nesse nó.
 - Perigo: correr `galera_new_cluster` com outros nós ativos cria clusters separados (split-brain).
 
-## 6.3 Permissões Linux (resumo)
+## 7.3 Permissões Linux (resumo)
 - r=4 (ler), w=2 (escrever), x=1 (executar/entrar na pasta). Ordem: dono, grupo, outros.
 - 600 = só o dono lê/escreve · 644 = dono lê/escreve, resto lê · 755 = dono tudo, resto lê/executa.
 - `ls -l`: `-rw-r--r--` = ficheiro, dono `rw-`, grupo `r--`, outros `r--` (644).
 
-## 6.4 Recursos (RAM) e número de VMs
+## 7.4 Recursos (RAM) e número de VMs
 - Os slides indicam o dimensionamento original (BD 3x16 GB, HAProxy BD 2x4 GB, Web 3x12 GB, NFS 2x8 GB, Ubuntu 18.04; ~110 GB no total). Não é para copiar num portátil de 16 GB.
 - Plano reduzido: BD 1 GB, HAProxy e NFS 512 MB, Web 1 GB = ~9 GB para as 12 VMs; **não ligar todas ao mesmo tempo** enquanto se constrói (macOS precisa de 4 a 6 GB). Vigiar a pressão de memória no Activity Monitor (verde ok, amarelo limite, vermelho demais).
 - Os slides mostram 12 VMs mas o professor falou em 16: perguntar quais são as 4 extra (talvez elasticidade) e se podemos usar menos RAM.
@@ -311,4 +479,10 @@ mysql -u root -p -e "DROP DATABASE teste_cluster;"
 
 
 # Falta fazer
-1. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), actualizar `wsrep_cluster_address` nos 3 nós, depois HAProxy + Keepalived à frente da BD.
+1. HAProxy da haproxydb01: confirmar o bloco `listen mariadb_cluster`, validar com `haproxy -c`, reiniciar e testar a ligação à BD pelo IP virtual (ver 6.11).
+2. Keepalived da haproxydb01: deixar ligado (`sudo systemctl start keepalived`) e confirmar o `.253` na `enp0s2` (foi parado nos testes de 6.9).
+3. Confirmar que o `machine-id` da haproxydb01 é diferente do da db02 (ver 6.3).
+4. Criar a haproxydb02 (`10.84.128.21`): mesmo caminho da Parte 3 e 4 e da Parte 6, com Keepalived em `state BACKUP` e `priority 100`; depois simular a falha parando o Keepalived da 01.
+5. `/etc/hosts` com a mesma tabela em todas as VMs (db01, db02, haproxydb01) e corrigir a linha `127.0.1.1 ubuntu-base` onde ainda houver.
+6. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
+7. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), atualizar `wsrep_cluster_address` nos 3 nós.
