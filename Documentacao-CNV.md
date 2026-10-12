@@ -299,8 +299,6 @@ O que é e o que se faz: uma VM nova clonada da `ubuntu-base`, com 512 MB, igual
 3. **Edit** → na placa existente, MAC **Random**; **New… → Network → Host Only**, também MAC **Random**.
 4. **System** → memória **512 MB** → **Save**.
 
-Engano evitado: o primeiro clone (`ha1db`) tinha sido feito a partir da **db02** e a `enp0s2` já vinha com o IP `10.84.128.16`, porque o IP fixo está no disco (`60-cluster.yaml`), não no MAC. Também trazia o MariaDB e o Galera da db02, que podiam tentar entrar no cluster. Solução: `sudo systemctl stop mariadb`, `sudo poweroff`, apagar essa VM (cuidado a escolher a certa) e clonar a `ubuntu-base`. Antes de apagar, confirmar na db01 que `wsrep_cluster_size` continua a 2.
-
 ## 6.2 Nome, MAC e IP fixo (.17)
 O que é e o que se faz: repetir na haproxydb01 o que já se fez nas BD, com o IP `10.84.128.17`.
 1. Ligar e ver as placas: `ip -br a` e `ip -br link`.
