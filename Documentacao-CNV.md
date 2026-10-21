@@ -719,12 +719,10 @@ O que é e o que se faz: simular a queda da haproxydb01 e ligar à BD pelo mesmo
 
 
 # Falta fazer
-1. Confirmar que o `machine-id` da haproxydb01 é diferente do da db02 (ver 6.3).
-2. `/etc/hosts` com a mesma tabela em todas as VMs (db01, db02, haproxydb01, haproxydb02): hoje a haproxydb01 usa `db1`/`db2`/`db3` e a haproxydb02 `db01`/`db02`/`db03`. Escolher um e acrescentar `haproxydb02` na linha do `.21` das outras. Corrigir a linha `127.0.1.1 ubuntu-base` onde ainda houver.
-3. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
-4. Apagar o utilizador de teste da BD (na db01: `DROP USER 'teste'@'10.84.128.%';`).
-5. Trocar a password dos stats do HAProxy nas duas máquinas (linha `stats auth` e `sudo systemctl reload haproxy`): ficou escrita no chat.
-6. Ver a página de estatísticas no browser do Mac, se o Mac chegar à rede 10.84.128.x (ver 6.9 e 6.13).
-7. Perguntar ao professor: para que serve o Apache nas HAProxy (6.5) e se o `option httpchk` do slide 38 é para usar (6.11).
-8. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), atualizar `wsrep_cluster_address` nos 3 nós. O HAProxy já tem a linha da db3.
-9. Próxima aula: nós web (slide 42: srv-moodleweb1/2/3, .24, .26, .27).
+1. `/etc/hosts` com a mesma tabela em todas as VMs (db01, db02, haproxydb01, haproxydb02): hoje a haproxydb01 usa `db1`/`db2`/`db3` e a haproxydb02 `db01`/`db02`/`db03`. Escolher um e acrescentar `haproxydb02` na linha do `.21` das outras. Corrigir a linha `127.0.1.1 ubuntu-base` onde ainda houver.
+2. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
+3. Apagar o utilizador de teste da BD (na db01: `DROP USER 'teste'@'10.84.128.%';`).
+4. Ver a página de estatísticas no browser do Mac, se o Mac chegar à rede 10.84.128.x (ver 6.9 e 6.13).
+5. Perguntar ao professor: para que serve o Apache nas HAProxy (6.5) e se o `option httpchk` do slide 38 é para usar (6.11).
+6. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), atualizar `wsrep_cluster_address` nos 3 nós. O HAProxy já tem a linha da db3.
+7. Próxima aula: nós web (slide 42: srv-moodleweb1/2/3, .24, .26, .27).
