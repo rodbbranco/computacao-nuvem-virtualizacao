@@ -7,7 +7,7 @@ Guia pela ordem em que as coisas se fazem. Para cada VM nova do trabalho prátic
 - Parte 3. Criar uma VM nova a partir do modelo
 - Parte 4. Rede do cluster (IP fixo e nomes)
 - Parte 5. Cluster de BD: MariaDB + Galera
-- Parte 6. HAProxy + Keepalived à frente da BD (slides 30 e 31)
+- Parte 6. HAProxy + Keepalived à frente da BD (slides 30 a 41)
 - Parte 7. Consulta
 - Falta fazer
 
@@ -106,7 +106,7 @@ Em cada VM do cluster.
 | db02 | db2 | 10.84.128.16 |
 | (3.ª, mais tarde) | db3 | 10.84.128.13 |
 | haproxydb01 | (haproxydb1 no `/etc/hosts`) | 10.84.128.17 |
-| haproxydb02 (ainda não criada) | haproxydb2 | 10.84.128.21 |
+| haproxydb02 | (haproxydb2 no `/etc/hosts`) | 10.84.128.21 |
 | IP virtual da BD (Keepalived) | | 10.84.128.253 |
 
 ## 4.1 Segunda placa de rede (UTM, VM desligada)
@@ -237,6 +237,12 @@ wsrep_sst_method=rsync
 wsrep_node_address="10.84.128.11"   # db02: 10.84.128.16
 wsrep_node_name="db1"               # db02: db2
 ```
+- Atenção ao `bind-address`: o ficheiro `/etc/mysql/mariadb.conf.d/50-server.cnf` traz `bind-address = 127.0.0.1` e é lido depois deste, por isso ganha. Sem corrigir, o Galera funciona mas o HAProxy não consegue ligar à porta 3306 (ver 6.12). Corrigir em todos os nós de BD:
+```
+sudo sed -i 's/^bind-address .*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+```
+- `sed -i`: edita o ficheiro diretamente.
+- `s/^bind-address .*/bind-address = 0.0.0.0/`: troca a linha que começa por `bind-address` por `bind-address = 0.0.0.0` (escutar em todos os IPs).
 
 ## 5.5 Firewall (nos nós com a ufw ativa; na db01 estava)
 ```
@@ -288,9 +294,62 @@ mysql -u root -p -e "DROP DATABASE teste_cluster;"
 - Regra: **o último a desligar é o primeiro a arrancar** com `galera_new_cluster`.
 - Se falhar com "safe to bootstrap": `sudo cat /var/lib/mariadb/grastate.dat`; o nó com `safe_to_bootstrap: 1` é o que deve arrancar primeiro.
 
+## 5.11 Arrancar o cluster quando nenhum nó é "seguro" (2026-10-21)
+O que é e o que se faz: as VMs foram desligadas sem parar o MariaDB, por isso nenhum nó ficou marcado como o último a sair. Descobre-se qual tem os dados mais recentes e marca-se esse à mão.
 
-# Parte 6. HAProxy + Keepalived à frente da BD (slides 30 e 31)
-Aula de 2026-10-12. Objetivo: duas máquinas HAProxy (haproxydb1 `.17` e haproxydb2 `.21`) à frente do cluster de BD, para alta disponibilidade e balanceamento de carga. Os clientes (mais tarde o Moodle) falam só com o IP virtual `10.84.128.253`, que passa de um HAProxy para o outro se um falhar. Hoje só a haproxydb01.
+Sintoma, na db01:
+```
+sudo galera_new_cluster
+# Job for mariadb.service failed ...
+sudo tail -n 30 /var/log/mariadb.log
+# [ERROR] WSREP: It may not be safe to bootstrap the cluster from this node.
+#   It was not the last one to leave the cluster ...
+```
+- O `systemctl status` e o `journalctl` cortam ou não mostram a causa; o erro verdadeiro está no `/var/log/mariadb.log` (o `log_error` do `galera.cnf`).
+
+1. Ver o estado nos dois nós (MariaDB parado, sem o arrancar):
+```
+sudo cat /var/lib/mariadb/grastate.dat
+```
+- Resultado nos dois: `seqno: -1` e `safe_to_bootstrap: 0`. O `-1` quer dizer "não sei até onde cheguei" (paragem não limpa).
+
+2. Ver até onde cada nó chegou:
+```
+sudo grep -h "Recovered position" /var/log/mariadb.log; sudo journalctl -u mariadb --no-pager | grep "Recovered position"
+```
+- `grep -h`: procura a frase, sem escrever o nome do ficheiro.
+- `journalctl -u mariadb --no-pager`: registo do serviço, todo seguido.
+- Só interessa a **última** linha de cada nó: `Recovered position 99233bbe-...:88`. O número do fim é a posição. Resultou `88` nos dois, ou seja, dados iguais.
+- O `sudo mariadbd --wsrep-recover --user=mysql` não mostra nada no ecrã: o resultado vai para o log.
+
+3. No nó escolhido (o de posição mais alta; empatados, tanto faz, escolheu-se a db01):
+```
+sudo sed -i 's/safe_to_bootstrap: 0/safe_to_bootstrap: 1/' /var/lib/mariadb/grastate.dat
+sudo galera_new_cluster
+```
+- `sed -i 's/A/B/'`: troca o texto A por B no próprio ficheiro.
+- O ficheiro certo é `/var/lib/mariadb/grastate.dat` (não `/var/lib/mysql/...`).
+
+4. Nos outros nós: `sudo systemctl start mariadb` (nunca `galera_new_cluster`).
+
+**Confirmado: cluster de volta com `wsrep_cluster_size` = 2.**
+
+Para evitar isto: parar o MariaDB pela ordem da 5.10 antes de desligar as VMs.
+
+## 5.12 Reiniciar um nó com o cluster a correr
+O que é e o que se faz: aplicar uma mudança de configuração sem deitar o cluster abaixo, reiniciando um nó de cada vez.
+```
+sudo systemctl restart mariadb
+sudo mariadb -u root -p -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+```
+- Reiniciar um nó, esperar que o `wsrep_cluster_size` volte a 2 e só depois reiniciar o outro.
+- A ordem não importa (a db01 foi reiniciada primeiro por engano e voltou ao cluster sem problemas), desde que nunca estejam os dois parados ao mesmo tempo.
+
+
+# Parte 6. HAProxy + Keepalived à frente da BD (slides 30 a 41)
+Aulas de 2026-10-12 (haproxydb01, Keepalived) e 2026-10-21 (HAProxy, haproxydb02, testes de falha). Objetivo: duas máquinas HAProxy (haproxydb1 `.17` e haproxydb2 `.21`) à frente do cluster de BD, para alta disponibilidade e balanceamento de carga. Os clientes (mais tarde o Moodle) falam só com o IP virtual `10.84.128.253`, que passa de um HAProxy para o outro se um falhar.
+
+Resumo da cadeia (slide 40): IP virtual (Keepalived) → 2 HAProxy → nós MariaDB Galera. Para crescer (slide 41), acrescentam-se nós ao par Keepalived+HAProxy ou ao cluster de BD.
 
 ## 6.1 Criar a haproxydb01 (UTM)
 O que é e o que se faz: uma VM nova clonada da `ubuntu-base`, com 512 MB, igual às outras (Parte 3).
@@ -344,8 +403,9 @@ sudo apt-get install haproxy keepalived apache2 -y
 - `install`: instala os pacotes indicados.
 - `haproxy`: recebe os pedidos e reparte-os pelas BD.
 - `keepalived`: cria o IP virtual e decide qual dos 2 HAProxy o tem (VRRP).
-- `apache2`: servidor web. O slide não diz para quê; dedução: página de teste ou verificação de que a máquina está viva. A confirmar com o professor.
+- `apache2`: servidor web. O slide 38 diz que é preciso "um webserver à escolha" para aceder às estatísticas do HAProxy. Na prática a página de estatísticas da 6.13 é servida pelo próprio HAProxy, por isso o papel do Apache fica a confirmar com o professor.
 - `-y`: responde "sim" às perguntas.
+- O slide 32 pede também o cliente MariaDB nas duas HAProxy (o slide escreve `mariadb-cliente`, com "e" a mais): `sudo apt-get install mariadb-client -y`. Serve para testar a ligação à BD a partir daqui (6.12).
 
 Confirmar:
 ```
@@ -410,6 +470,7 @@ systemctl is-active keepalived       # active / inactive
 - Para ver por onde o Mac envia um IP: `route -n get 10.84.128.253` (linhas `gateway:` e `interface:`).
 - `arp -n IP` mostra o MAC associado a um IP (a haproxydb01 tem `4e:c7:71:6b:47:8b`); `sudo arp -d IP` apaga a entrada da tabela.
 - **Teste a partir da db01 feito e resultou.**
+- No fim dos testes, voltar a ligar: `sudo systemctl start keepalived`.
 
 ## 6.10 Engano: instalar `mailutils-mh` sem querer
 O que é e o que se faz: pacote instalado por engano; remove-se com a configuração e as dependências que só ele puxou.
@@ -421,34 +482,206 @@ sudo apt-get autoremove --purge -y
 - `autoremove --purge`: remove os pacotes que só estavam instalados por causa dele.
 - Ler a lista antes do Enter: se aparecer `haproxy`, `keepalived` ou `apache2`, parar.
 
-## 6.11 HAProxy: balancear as ligações às BD (por fazer)
-O que é e o que se faz: o HAProxy fica à escuta na porta 3306 e reparte as ligações pela db1 e db2, à vez.
+## 6.11 HAProxy na haproxydb01 (slides 36 a 38)
+O que é e o que se faz: o HAProxy recebe as ligações à BD no IP virtual, porta 3306, e reparte-as pelos nós do Galera. Também mostra uma página de estatísticas. Organização do ficheiro (`global`, `defaults`, `frontend`, `backend`, `listen`) na 7.5.
+
+1. Cópia de segurança do ficheiro original (o slide 38 pede-a em cada nó; fazer também na haproxydb02):
+```
+sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak
+```
+- `cp`: copia um ficheiro. O primeiro caminho é o original, o segundo o nome da cópia (`.bak` = backup).
+
+2. Acrescentar no fim do ficheiro, sem apagar o que lá está:
 ```
 sudo nano /etc/haproxy/haproxy.cfg
 ```
-Acrescentar no fim, sem apagar o que lá está:
 ```
-listen mariadb_cluster
-    bind *:3306
+listen stats
+    bind 10.84.128.17:1936
+    mode http
+    stats enable
+    stats hide-version
+    stats refresh 5s
+    stats show-node
+    stats auth admin:PASSWORD_DOS_STATS
+    stats uri /stat
+
+frontend srv-haproxydb
+    bind 10.84.128.253:3306
+    mode tcp
+    option tcplog
+    default_backend galera-cluster
+
+backend galera-cluster
     mode tcp
     balance roundrobin
-    option tcpka
     server db1 10.84.128.11:3306 check
     server db2 10.84.128.16:3306 check
+    server db3 10.84.128.13:3306 check
 ```
-- `listen mariadb_cluster`: bloco que junta a entrada e os servidores de trás; o nome é livre.
-- `bind *:3306`: escuta na porta 3306 em todos os IPs da máquina, incluindo o virtual.
-- `mode tcp`: passa as ligações tal como vêm (o MariaDB não é HTTP).
-- `balance roundrobin`: distribui à vez.
-- `option tcpka`: mantém as ligações vivas com pequenos sinais.
-- `server db1 10.84.128.11:3306 check`: servidor de trás (nome, IP, porta); `check` faz o HAProxy testar se está vivo e deixar de lhe enviar ligações se falhar. A linha da db2 é igual com o `.16`.
+- `listen stats`: página web de estatísticas. `bind 10.84.128.17:1936` escuta no IP próprio da máquina, porta 1936.
+- `stats enable`: liga a página. `hide-version`: esconde a versão do HAProxy. `refresh 5s`: atualiza de 5 em 5 segundos. `show-node`: mostra o nome da máquina.
+- `stats auth admin:PASSWORD_DOS_STATS`: login da página (utilizador:password). A password verdadeira não fica escrita aqui.
+- `stats uri /stat`: endereço da página.
+- `frontend srv-haproxydb`: a porta de entrada. `bind 10.84.128.253:3306` escuta no **IP virtual**, na porta do MariaDB.
+- `mode tcp`: passa as ligações sem as ler (o MariaDB não é HTTP).
+- `option tcplog`: formato de log para TCP. Sem esta linha aparece o aviso `'option httplog' not usable with frontend 'srv-haproxydb' (needs 'mode http')`, porque o `defaults` traz `option httplog`. É só um aviso: o HAProxy passa sozinho para `tcplog`.
+- `default_backend galera-cluster`: manda tudo para o grupo `galera-cluster`.
+- `balance roundrobin`: cada ligação **nova** vai para o servidor seguinte, à vez.
+- `server db1 10.84.128.11:3306 check`: nome, IP e porta de cada nó. `check` testa se está vivo e deixa de lhe mandar ligações se falhar. A db3 ainda não existe: fica DOWN e é ignorada.
+- Diferença em relação ao slide 38: o slide tem `option httpchk` no backend. Esse teste faz um pedido web à porta 3306, onde só responde o MariaDB, por isso as BD deviam ficar todas DOWN. Ficou só `check`. A confirmar com o professor.
 
-Validar antes de usar:
+3. Validar, reiniciar e ver as portas:
 ```
 sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+sudo systemctl restart haproxy && sudo ss -tlnp | grep haproxy
 ```
-- `-c`: só verifica (check), não arranca; `-f`: o ficheiro a verificar. Esperado: `Configuration file is valid`.
-- Falta confirmar se o bloco foi acrescentado e validado; depois reiniciar o HAProxy (`sudo systemctl restart haproxy`) e testar.
+- `haproxy -c -f ficheiro`: só verifica a configuração (`-c` = check; `-f` = ficheiro).
+- `restart`: pára e volta a arrancar o serviço, para ler o ficheiro novo.
+- `ss -tlnp`: portas à escuta (`t` TCP, `l` à escuta, `n` números, `p` programa). `| grep haproxy`: só as do HAProxy.
+- Resultado: `10.84.128.253:3306` e `10.84.128.17:1936`. **Confirmado.**
+
+## 6.12 Testar a ligação à BD pelo IP virtual (slide 39)
+O que é e o que se faz: ligar ao MariaDB através do `.253` e ver qual nó responde. O `root` da BD só entra a partir da própria máquina, por isso cria-se um utilizador só para este teste.
+
+1. Na db01 (o Galera copia-o para a db02):
+```
+sudo mariadb -u root -p
+```
+```
+CREATE USER 'teste'@'10.84.128.%' IDENTIFIED BY 'PASSWORD_DE_TESTE';
+GRANT USAGE ON *.* TO 'teste'@'10.84.128.%';
+exit
+```
+- `CREATE USER 'teste'@'10.84.128.%'`: utilizador `teste`, que só pode entrar a partir da rede 10.84.128.x (`%` = qualquer).
+- `IDENTIFIED BY`: a password.
+- `GRANT USAGE`: só o direito de ligar, sem acesso a dados.
+- Para mudar a password: `ALTER USER 'teste'@'10.84.128.%' IDENTIFIED BY 'nova';`.
+
+2. Na haproxydb01, repetir várias vezes:
+```
+mariadb -h 10.84.128.253 -u teste -p -e "SELECT @@hostname;"
+```
+- `-h 10.84.128.253`: liga a esse IP (o virtual) em vez da própria máquina.
+- `SELECT @@hostname`: pergunta o nome da máquina que respondeu.
+- Resultado: alterna entre `db01` e `db02` (roundrobin). **Confirmado.**
+
+### Problema: `ERROR 2013 ... Lost connection to server at 'handshake: reading initial communication packet'`
+- Significado: o HAProxy aceitou a ligação mas não conseguiu falar com nenhuma BD por trás.
+- Primeira causa: o cluster estava em baixo (VMs desligadas sem parar o MariaDB). Resolvido com a 5.11.
+- Segunda causa: o MariaDB só escutava em `127.0.0.1`.
+  - Separar o problema, ligando diretamente a um nó sem passar pelo HAProxy: `mariadb -h 10.84.128.11 -u teste -p -e "SELECT @@hostname;"` dava `ERROR 2002 ... (115)`.
+  - `ping -c 2 10.84.128.11; nc -zv -w 3 10.84.128.11 3306`: o ping respondia mas o `nc` dava `Connection refused` (a máquina está viva mas ninguém escuta nessa porta). `-w 3` = desistir ao fim de 3 segundos.
+  - Na db01, `sudo ss -tlnp | grep -E "3306|mariadb"` mostrava `127.0.0.1:3306`, e `sudo grep -rn "bind-address" /etc/mysql/` mostrou o `50-server.cnf` com `127.0.0.1`.
+  - Correção: o `sed` da 5.4 nas duas BD e reiniciar uma de cada vez (5.12). Depois, `ss` mostra `0.0.0.0:3306` nas duas. **Confirmado.**
+- Uma password errada daria `Access denied`, não estes erros.
+
+## 6.13 Página de estatísticas
+O que é e o que se faz: confirmar que a página do `listen stats` responde (o slide 39 mostra-a com as sessões repartidas por db1, db2 e db3).
+```
+curl -u admin:PASSWORD_DOS_STATS http://10.84.128.17:1936/stat | head
+```
+- `curl`: pede uma página web a partir do terminal.
+- `-u utilizador:password`: o login do `stats auth`. Com caracteres especiais, a password vai entre aspas.
+- `http://10.84.128.17:1936/stat`: IP próprio da máquina, porta e caminho da página.
+- `| head`: só as primeiras 10 linhas. O `curl: Failed writing body` do fim é normal (o `head` fechou).
+- Resultado: HTML com `Statistics Report for HAProxy on haproxydb01`. **Confirmado.** Vista no browser do Mac: por testar (o Mac pode não chegar à rede 10.84.128.x, ver 6.9).
+
+## 6.14 Criar a haproxydb02 (.21)
+O que é e o que se faz: a segunda máquina HAProxy, igual à haproxydb01 (6.1 a 6.5), com o IP `10.84.128.21`.
+- Clonar da `ubuntu-base`, MAC novo, `machine-id` novo, hostname `haproxydb02`, chaves SSH novas, MAC no `00-installer-config.yaml`, `60-cluster.yaml` com `10.84.128.21/24` (Partes 3 e 4).
+- Confirmar tudo de uma vez:
+```
+hostname; ip -br a; cat /etc/machine-id
+```
+  - `;` corre os comandos seguidos. O `machine-id` tem de ser diferente do da haproxydb01.
+- Instalar: `sudo apt-get update && sudo apt-get install haproxy keepalived apache2 mariadb-client -y` (`&&` só corre o segundo se o primeiro correr bem).
+- `/etc/hosts` usado na haproxydb02:
+```
+127.0.1.1 haproxydb02
+...
+10.84.128.11 db01
+10.84.128.16 db02
+10.84.128.13 db03
+10.84.128.17 haproxydb01
+10.84.128.21 haproxydb02
+```
+  - Os nomes das BD aqui (`db01`) não são os mesmos da haproxydb01 (`db1`). Funciona, porque a configuração usa IPs, mas fica por uniformizar (ver Falta fazer).
+
+### Problema: `ping haproxydb01` respondia a partir de `127.0.1.1`
+- Sintoma: `PING haproxydb01 (127.0.1.1)`, com 0,08 ms. A máquina estava a falar consigo própria.
+- Causa: a linha `127.0.1.1` do `/etc/hosts` tinha ficado com `haproxydb01`.
+- Correção: `127.0.1.1 haproxydb02`. Ver o ficheiro com números de linha: `grep -n "" /etc/hosts`.
+
+### Problema: ping à haproxydb01 rápido demais
+- Sintoma: depois de corrigir o `/etc/hosts`, o ping ao `10.84.128.17` dava 0,08 ms. Entre duas VMs é normal 0,5 ms ou mais.
+- Causa provável: a `enp0s2` da haproxydb02 ainda tinha o `.17`. Ver com `ip -br a show enp0s2`, corrigir o `60-cluster.yaml` para `.21` e `sudo netplan apply`.
+- Depois da correção, o ping deu 1,4 ms e 12 ms. **Confirmado.**
+
+### O "cluster" dos HAProxy
+- Não é como o Galera: as duas HAProxy não trocam dados. São duas máquinas com a mesma configuração, feita à mão em cada uma, e o Keepalived decide qual tem o IP virtual.
+- O nome `60-cluster.yaml` não tem nada a ver com o Galera: é só o ficheiro do IP fixo da rede interna, que todas as VMs têm.
+
+## 6.15 Keepalived na haproxydb02 (BACKUP, slides 33 e 34)
+O que é e o que se faz: a mesma configuração da 6.7, mas como reserva.
+```
+sudo nano /etc/keepalived/keepalived.conf
+```
+```
+vrrp_instance VI_DB {
+    state BACKUP
+    interface enp0s2
+    virtual_router_id 53
+    priority 100
+    advert_int 1
+    virtual_ipaddress {
+        10.84.128.253/24
+    }
+}
+```
+- `state BACKUP`: fica à espera, sem o `.253`.
+- `priority 100`: abaixo dos 101 da haproxydb01, por isso a 01 ganha enquanto estiver viva. Se o MASTER tiver prioridade mais baixa que o BACKUP, perde o estatuto (slide 33).
+- `virtual_router_id 53`: igual nas duas, senão não se reconhecem.
+- Arrancar: `sudo systemctl enable --now keepalived`.
+- Confirmar: `ip -br a show enp0s2` mostra só o `.21`. **Confirmado.**
+
+## 6.16 Teste de falha do IP virtual (slide 35)
+O que é e o que se faz: parar o Keepalived da 01 e ver o `.253` passar para a 02.
+1. haproxydb01: `ip -br a show enp0s2` → `.17` e `.253`.
+2. haproxydb01: `sudo systemctl stop keepalived` → fica só com o `.17`.
+3. haproxydb02, uns segundos depois: `ip -br a show enp0s2` → `.21` e `.253`.
+4. haproxydb01: `sudo systemctl start keepalived` → recupera o `.253` (prioridade maior) e a 02 volta a ficar só com o `.21`.
+
+**Confirmado.**
+
+## 6.17 Deixar o HAProxy escutar num IP que a máquina ainda não tem
+O que é e o que se faz: na haproxydb02 o `.253` só existe quando ela é MASTER. Sem isto, o HAProxy recusa o `bind 10.84.128.253:3306` e não arranca. Faz-se nas duas HAProxy, para tudo arrancar depois de um failover ou de um reboot.
+```
+echo "net.ipv4.ip_nonlocal_bind = 1" | sudo tee /etc/sysctl.d/99-haproxy.conf
+sudo sysctl --system
+sysctl net.ipv4.ip_nonlocal_bind
+```
+- `echo "..." | sudo tee ficheiro`: escreve o texto no ficheiro com permissões de administrador (com `sudo echo > ficheiro` não funciona, porque o `>` corre sem sudo).
+- `/etc/sysctl.d/`: definições do kernel lidas em cada arranque.
+- `ip_nonlocal_bind = 1`: permite escutar em IPs que a máquina não tem.
+- `sysctl --system`: aplica já todas as definições, sem reiniciar.
+- `sysctl net.ipv4.ip_nonlocal_bind`: mostra o valor. Resultado: `= 1` nas duas. **Confirmado.**
+
+## 6.18 HAProxy na haproxydb02
+O que é e o que se faz: a mesma configuração da 6.11, com uma diferença: no `listen stats`, `bind 10.84.128.21:1936` (o IP próprio da 02). A password dos stats é a mesma nas duas.
+```
+sudo haproxy -c -f /etc/haproxy/haproxy.cfg && sudo systemctl restart haproxy && sudo ss -tlnp | grep haproxy
+```
+- Resultado: à escuta em `10.84.128.21:1936` e `10.84.128.253:3306`, mesmo sem ter o IP virtual (graças à 6.17). **Confirmado.**
+
+## 6.19 Teste final: cai uma HAProxy e a BD continua acessível (slide 40)
+O que é e o que se faz: simular a queda da haproxydb01 e ligar à BD pelo mesmo IP virtual.
+1. haproxydb01: `sudo systemctl stop keepalived haproxy` (pára os dois serviços).
+2. haproxydb02: `ip -br a show enp0s2` → `.21` e `.253`.
+3. haproxydb02: `mariadb -h 10.84.128.253 -u teste -p -e "SELECT @@hostname;"`, várias vezes → alterna entre `db01` e `db02`.
+4. haproxydb01: `sudo systemctl start haproxy keepalived` → as ligações continuam a funcionar.
+
+**Confirmado: slides 30 a 41 concluídos, com 2 nós de BD (a db3 fica para o trabalho prático).**
 
 
 # Parte 7. Consulta
@@ -475,12 +708,23 @@ sudo haproxy -c -f /etc/haproxy/haproxy.cfg
 - Os slides mostram 12 VMs mas o professor falou em 16: perguntar quais são as 4 extra (talvez elasticidade) e se podemos usar menos RAM.
 - Os slides usam Ubuntu 18.04 e nós o 26.04: alguns comandos mudaram (`mariadb-secure-installation`, nomes `mariadb`/`mariadbd`).
 
+## 7.5 Organização do `haproxy.cfg` (slides 36 e 37)
+- `global`: regras para o HAProxy inteiro. Ex.: `maxconn 50000` (máximo de ligações, protege a memória), `log` (para onde vão os logs).
+- `defaults`: valores aplicados a todos os frontends e backends, para não os repetir. Ex.: `mode http` (nível 7, aplicação: percebe páginas web) ou `mode tcp` (nível 4, transporte: só passa os dados); `option forwardfor` (passa aos servidores o IP do cliente).
+- `frontend`: onde os clientes ligam. `bind IP:porta` (onde escuta) e `default_backend` (para que grupo manda). Pode ter o seu próprio `mode`, que se sobrepõe ao do `defaults`.
+- `backend`: o grupo de servidores que trata os pedidos. `balance` (algoritmo) e uma linha `server nome IP:porta` por servidor. O nome tem de ser igual ao do `default_backend` do frontend.
+- `listen`: junta frontend e backend num só bloco. Mais curto, mas mais difícil de ler (o professor prefere separar).
+- Algoritmos de `balance`: `roundrobin` (à vez, o do slide), `leastconn` (para o servidor com menos ligações abertas), `source` (o mesmo cliente vai sempre para o mesmo servidor).
+- O HAProxy suporta TCP e HTTP. Para a BD usa-se `mode tcp`.
+
 
 # Falta fazer
-1. HAProxy da haproxydb01: confirmar o bloco `listen mariadb_cluster`, validar com `haproxy -c`, reiniciar e testar a ligação à BD pelo IP virtual (ver 6.11).
-2. Keepalived da haproxydb01: deixar ligado (`sudo systemctl start keepalived`) e confirmar o `.253` na `enp0s2` (foi parado nos testes de 6.9).
-3. Confirmar que o `machine-id` da haproxydb01 é diferente do da db02 (ver 6.3).
-4. Criar a haproxydb02 (`10.84.128.21`): mesmo caminho da Parte 3 e 4 e da Parte 6, com Keepalived em `state BACKUP` e `priority 100`; depois simular a falha parando o Keepalived da 01.
-5. `/etc/hosts` com a mesma tabela em todas as VMs (db01, db02, haproxydb01) e corrigir a linha `127.0.1.1 ubuntu-base` onde ainda houver.
-6. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
-7. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), atualizar `wsrep_cluster_address` nos 3 nós.
+1. Confirmar que o `machine-id` da haproxydb01 é diferente do da db02 (ver 6.3).
+2. `/etc/hosts` com a mesma tabela em todas as VMs (db01, db02, haproxydb01, haproxydb02): hoje a haproxydb01 usa `db1`/`db2`/`db3` e a haproxydb02 `db01`/`db02`/`db03`. Escolher um e acrescentar `haproxydb02` na linha do `.21` das outras. Corrigir a linha `127.0.1.1 ubuntu-base` onde ainda houver.
+3. Confirmar nomes `db01`/`db02` em todo o lado (hostname, UTM, `~/bin/vms`, `~/.ssh/config`, Warp).
+4. Apagar o utilizador de teste da BD (na db01: `DROP USER 'teste'@'10.84.128.%';`).
+5. Trocar a password dos stats do HAProxy nas duas máquinas (linha `stats auth` e `sudo systemctl reload haproxy`): ficou escrita no chat.
+6. Ver a página de estatísticas no browser do Mac, se o Mac chegar à rede 10.84.128.x (ver 6.9 e 6.13).
+7. Perguntar ao professor: para que serve o Apache nas HAProxy (6.5) e se o `option httpchk` do slide 38 é para usar (6.11).
+8. Mais tarde (trabalho prático): 3.º nó (db3, 10.84.128.13), atualizar `wsrep_cluster_address` nos 3 nós. O HAProxy já tem a linha da db3.
+9. Próxima aula: nós web (slide 42: srv-moodleweb1/2/3, .24, .26, .27).
